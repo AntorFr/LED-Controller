@@ -1,0 +1,359 @@
+<?xml version="1.0"?>
+<implementation>
+    <functions>
+        --  Pilote your LED strip through Arduino
+        --
+        -- Author: Antor
+        -- Date: 09/30/2012
+        --
+        --   You can set the following:
+        --     Arduino IP
+        --
+        local LEDC_SID = "urn:antor-fr:serviceId:LEDController1"
+        local SWPOWER_SID = "urn:upnp-org:serviceId:SwitchPower1"
+        local DIM_SID = "urn:upnp-org:serviceId:Dimming1"
+        
+        function initItem(lul_device)
+            log("Starting LED strip controller device " .. tostring(lul_device))
+        
+        
+            -- to initialize the variables
+            readSettings(lul_device)
+        
+            -- to sync de status with controlled item
+            --Poll(lul_device)
+        
+            log("LED strip device started " .. tostring(lul_device))
+        
+            return true,"ok","LEDController1"
+        end
+        
+        function readSettings(lul_device)
+            local data = {}
+            data.color   = {}
+        
+            data.ArduinoIP = luup.devices[lul_device].ip
+        
+            data.motif      = readVariableOrInit(lul_device,LEDC_SID,"Motif","Color")
+            data.color[1]   = tonumber(readVariableOrInit(lul_device,LEDC_SID,"Red", 255))
+            data.color[2]   = tonumber(readVariableOrInit(lul_device,LEDC_SID,"Green", 255))
+            data.color[3]   = tonumber(readVariableOrInit(lul_device,LEDC_SID,"Blue", 255))
+            data.speed      = tonumber(readVariableOrInit(lul_device,LEDC_SID,"Speed",50))
+        
+            return data
+        end
+        
+        -- COMMUN FUNCTION
+        
+        function readVariableOrInit(lul_device, devicetype, name, defaultValue)
+            local var = luup.variable_get(devicetype,name, lul_device)
+            if (var == nil) then
+                var = defaultValue
+                luup.variable_set(devicetype,name,var,lul_device)
+            end
+            return var
+        end
+        
+        function writeVariable(lul_device,devicetype, name, value)
+            luup.variable_set(devicetype,name,value,lul_device)
+        end
+        
+        function url_encode(str)
+            if (str) then
+                str = string.gsub (str, "\n", "\r\n")
+                str = string.gsub (str, "([^%w ])",
+                function (c) return string.format ("%%%02X", string.byte(c)) end)
+                str = string.gsub (str, " ", "+")
+            end
+            return str
+        end
+        
+        function fromListOfNumbers(t)
+            return table.concat(t, ",")
+        end
+        
+        function toListOfNumbers(s)
+            t = {}
+            for v in string.gmatch(s, "(-?[0-9]+)") do
+                table.insert(t, tonumber(v))
+            end
+            return t
+        end
+        
+        function round(num, idp)
+            local mult = 10^(idp or 0)
+            return math.floor(num * mult + 0.5) / mult
+        end
+        
+        -- END COMMUN FUNCTION
+        
+        function Poll(lul_device)
+            local data = readSettings(lul_device)
+            local status,xml
+        
+            status,xml = luup.inet.wget(data.ArduinoIP,10)
+            if(status == 0) then
+                ResultIsOk(lul_device,xml)
+            else
+                return false
+            end
+            data = readSettings(lul_device)
+        
+            local sumColor = data.color[1]+data.color[2]+data.color[3]
+        
+            if data.motif == "" or sumColor == 0 then
+                writeVariable(lul_device, SWPOWER_SID, "Status", 0)
+                writeVariable(lul_device, DIM_SID, "LoadLevelStatus", 0)
+            else
+                writeVariable(lul_device, SWPOWER_SID, "Status", 1)
+                writeVariable(lul_device, DIM_SID, "LoadLevelStatus", round(100*sumColor/(3*255),0))
+            end
+        
+        end
+        
+        function ResultIsOk(lul_device,xml)
+            local patternMotif = "&lt;motif&gt;(%w*)&lt;/motif&gt;"
+            local patternColor = "&lt;color&gt;(%d+,%d+,%d+)&lt;/color&gt;"
+            local patternSpeed = "&lt;speed&gt;(%d+)&lt;/speed&gt;"
+        
+            local Motif = xml:match(patternMotif)
+            log(Motif)
+            local Color = xml:match(patternColor)
+            log(Color)
+            local Speed = xml:match(patternSpeed)
+            log(Speed)
+        
+            if Motif~= nill then
+                writeVariable(lul_device, LEDC_SID, "Motif", Motif)
+            end
+        
+            if Color~= nill then
+            Color = toListOfNumbers(Color)
+                if #Color == 3 then
+                    writeVariable(lul_device, LEDC_SID, "Red",   Color[1])
+                    writeVariable(lul_device, LEDC_SID, "Green", Color[2])
+                    writeVariable(lul_device, LEDC_SID, "Blue",  Color[3])
+                end
+            end
+        
+            if Speed~= nill then
+                writeVariable(lul_device, LEDC_SID, "Speed", Speed)
+            end
+        
+            return true
+        end
+        
+        function SetColor(lul_device,red,green,blue)
+            local data = readSettings(lul_device)
+            if data.color~= nill and #data.color == 3 then
+        
+                if red ~= nill and red ~= "" then data.color[1] = red end
+                if green ~= nill and green ~= "" then data.color[2] = green end
+                if blue ~= nill and blue ~= "" then data.color[3] = blue end
+        
+                local newRGB = fromListOfNumbers(data.color)
+        
+                if SetDisplay(lul_device,data.motif,newRGB,data.speed) then
+                    writeVariable(lul_device, LEDC_SID, "Red",   data.color[1])
+                    writeVariable(lul_device, LEDC_SID, "Green", data.color[2])
+                    writeVariable(lul_device, LEDC_SID, "Blue",  data.color[3])
+                    return true
+                else
+                    return false
+                end
+            else
+                return false
+            end
+        end
+
+        function SetMotif(lul_device,motif)
+            local data = readSettings(lul_device)
+            if motif ~= nill and motif ~= "" then
+                writeVariable(lul_device, LEDC_SID, "Motif", motif)
+                return SetDisplay(lul_device,motif,data.color,data.speed)
+            else
+                return false
+            end
+        end
+
+        function SetSpeed(lul_device,speed)
+            local data = readSettings(lul_device)
+            if speed ~= nill and speed ~= "" then
+                writeVariable(lul_device, LEDC_SID, "Speed", speed)
+                return SetDisplay(lul_device,data.motif,data.color,speed)
+            else
+                return false
+            end
+        end
+        
+        
+        function SetTarget(lul_device,value)
+            local stat
+            if value == "1" then
+                writeVariable(lul_device, SWPOWER_SID, "Target", 1)
+                stat = SetDisplay(lul_device,"Color")
+                if not stat then return false end
+                writeVariable(lul_device, SWPOWER_SID, "Status", 1)
+                writeVariable(lul_device, DIM_SID, "LoadLevelStatus", 100)
+                return true
+            else
+                writeVariable(lul_device, SWPOWER_SID, "Target", 0)
+                stat = SetDisplay(lul_device)
+                if not stat then return false end
+                writeVariable(lul_device, SWPOWER_SID, "Status", 0)
+                writeVariable(lul_device, DIM_SID, "LoadLevelStatus", 0)
+                return true
+            end
+        end
+        
+        function SetLevel(lul_device,value)
+            value = tonumber(value)
+    
+            local RGBvalue = round(value * 255 / 100,0)
+            local RGBstring = RGBvalue  .. "," .. RGBvalue .. "," .. RGBvalue
+        
+            if value ~= nil and value > 0 then
+                writeVariable(lul_device, SWPOWER_SID, "Target", 1)
+                stat = SetDisplay(lul_device,"Color",RGBstring)
+                if not stat then return false end
+                writeVariable(lul_device, SWPOWER_SID, "Status", 1)
+                writeVariable(lul_device, DIM_SID, "LoadLevelStatus", value)
+                return true
+            else
+                return SetTarget(lul_device,0)
+            end
+        end
+        
+        function SetDisplay(lul_device,newMotif,newColor,newSpeed)
+            local data = readSettings(lul_device)
+        
+            url = data.ArduinoIP.. "/?"
+        
+            if (newMotif ~= "" and newMotif~= nil) then
+                url = url .. "L=" .. newMotif
+            end
+        
+            if newColor ~= "" and newColor~= nil then
+                if newColor == "red" then
+                    local RGBString = "R=255"
+                    url = url .. "&amp;" .. RGBString
+                elseif newColor == "green" then
+                    local RGBString = "G=255"
+                    url = url .. "&amp;" .. RGBString
+                elseif newColor == "blue" then
+                    local RGBString = "B=255"
+                    url = url .. "&amp;" .. RGBString
+                else
+                    local RGB = toListOfNumbers(newColor)
+                    if RGB~= nill and #RGB == 3 then
+                        local RGBString = "R=" .. RGB[1] .. "&amp;G=" .. RGB[2] .. "&amp;B=" .. RGB[3]
+                        url = url .. "&amp;" .. RGBString
+                    end
+                end
+            end
+            
+            if tonumber(newSpeed) ~= "" and newSpeed~= nil then
+                url = url .. "&amp;S=" .. newSpeed
+            end
+
+            log(url)
+        
+            status,xml = luup.inet.wget(url,10)
+            if(status == 0) then
+                ResultIsOk(lul_device,xml)
+                return true
+            else
+                return false
+            end
+        end
+        
+        function log(msg)
+            luup.log("LEDController : " .. msg)
+        end
+    </functions>
+    <startup>initItem</startup>
+    <actionList>
+        <action>
+            <serviceId>urn:upnp-org:serviceId:SwitchPower1</serviceId>
+            <name>SetTarget</name>
+            <job>
+                log("SetTarget called")
+                if SetTarget(lul_device,lul_settings.newTargetValue) then
+                    return 4, 5
+                else
+                    return 2, 5
+                end
+            </job>
+        </action>
+        <action>
+            <serviceId>urn:micasaverde-com:serviceId:HaDevice1</serviceId>
+            <name>Poll</name>
+            <job>
+                log("Poll called")
+                sync(lul_device)
+                return 4, 5
+            </job>
+        </action>
+        <action>
+            <serviceId>urn:upnp-org:serviceId:Dimming1</serviceId>
+            <name>SetLoadLevelTarget</name>
+            <job>
+                log("SetLoadLevelTarget called")
+                if SetLevel(lul_device,lul_settings.newLoadlevelTarget) then
+                    return 4, 5
+                else
+                    return 2, 5
+                end
+            </job>
+        </action>
+        <action>
+            <serviceId>urn:antor-fr:serviceId:LEDController1</serviceId>
+            <name>SetDisplay</name>
+            <job>
+                log("SetDisplay called")
+                if SetDisplay(lul_device,lul_settings.newMotif,lul_settings.newColor,lul_settings.newSpeed) then
+                    return 4, 5
+                else
+                    return 2,5
+                end
+            </job>
+        </action>
+        <action>
+            <serviceId>urn:antor-fr:serviceId:LEDController1</serviceId>
+            <name>SetColor</name>
+            <job>
+                log("SetColor called")
+                    if SetColor(lul_device,lul_settings.newRed,lul_settings.newGreen,lul_settings.newBlue) then
+                    return 4, 5
+                else
+                    return 2,5
+                end
+            </job>
+        </action>
+        <action>
+            <serviceId>urn:antor-fr:serviceId:LEDController1</serviceId>
+            <name>SetMotif</name>
+            <job>
+                log("SetMotif called")
+                if SetMotif(lul_device,lul_settings.newMotif) then
+                    return 4, 5
+                else
+                    return 2,5
+                end
+            </job>
+        </action>
+        <action>
+            <serviceId>urn:antor-fr:serviceId:LEDController1</serviceId>
+            <name>SetSpeed</name>
+            <job>
+                log("SetSpeed called")
+                if SetSpeed(lul_device,lul_settings.newSpeed) then
+                    return 4, 5
+                else
+                    return 2,5
+                end
+            </job>
+        </action>
+    </actionList>
+</implementation>
+
