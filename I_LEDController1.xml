@@ -246,7 +246,7 @@
                 else
                     local RGB = toListOfNumbers(newColor)
                     if RGB~= nill and #RGB == 3 then
-                        local RGBString = "R=" .. RGB[1] .. "&amp;G=" .. RGB[2] .. "&amp;B=" .. RGB[3]
+                        local RGBString = "R=" .. RGB[1] .. "&amp;G=" .. RGB[2] .. "&amp;B=" .. RGB[3] .. "&amp;"
                         url = url .. "&amp;" .. RGBString
                     end
                 end
